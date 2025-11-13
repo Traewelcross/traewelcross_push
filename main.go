@@ -10,12 +10,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 	"traewelcross_push/structs"
 
 	"github.com/rs/zerolog"
+	"google.golang.org/api/option"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
@@ -37,7 +37,7 @@ func main() {
 		logger.Error().Msg("Error loading .env file")
 	}
 
-	app, err := firebase.NewApp(context.Background(), nil)
+	app, err := firebase.NewApp(context.Background(), nil, option.WithCredentialsFile(os.Getenv("FIREBASE_CONFIG")))
 	if err != nil {
 		logger.Fatal().Msgf("firebase error: %v\n", err)
 	}
@@ -74,7 +74,7 @@ func main() {
 		logger.Fatal().Msgf("Failed to create events table: %v", err)
 	}
 
-	log.Println("Devices table successfully created or already exists.")
+	log.Println("Devices & Events tables successfully created or already exists.")
 	router := gin.Default()
 	router.GET("/", func(c *gin.Context) {
 		str, _ := io.ReadAll(c.Request.Body)
@@ -243,7 +243,13 @@ func sendPush(ctx *gin.Context, db *sql.DB, app *firebase.App) {
 	if err != nil {
 		logger.Warn().Err(err).Msg("Coudln't insert Event")
 	}
-	rows, err := db.QueryContext(ctx, "SELECT fcm_token FROM devices WHERE user_id = $1", userIdStr)
+	stmt, err := db.PrepareContext(ctx, "SELECT fcm_token FROM devices WHERE user_id = $1 AND is_firebase")
+	if err != nil {
+		logger.Error().Msg("Can't prepare token query")
+		ctx.Status(500)
+		return
+	}
+	rows, err := stmt.QueryContext(ctx, userIdStr)
 	if err != nil {
 		logger.Error().Msg("Can't query token(s)")
 		ctx.Status(500)
@@ -268,7 +274,7 @@ func sendPush(ctx *gin.Context, db *sql.DB, app *firebase.App) {
 
 	client, err := app.Messaging(ctx)
 	if err != nil {
-		logger.Error().Msg("Failed to create message client")
+		logger.Error().Err(err).Msg("Failed to create message client")
 		ctx.Status(500)
 		return
 	}
@@ -363,11 +369,11 @@ func registerDevice(ctx *gin.Context, db *sql.DB) {
 		ctx.JSON(400, structs.Error{
 			//invalid user id
 			Reason: "iui",
-			Msg:    "",
+			Msg:    fmt.Sprintf("%s != %s", userId, registration.SupposedUserId),
 		})
 		return
 	}
-	stmt, err := db.PrepareContext(ctx, "INSERT INTO devices (user_id,fcm_token,failed_attempts) VALUES ($1,$2,0)")
+	stmt, err := db.PrepareContext(ctx, "INSERT INTO devices (user_id,fcm_token,is_firebase,failed_attempts) VALUES ($1,$2,$3,0)")
 	if err != nil {
 		ctx.JSON(500, structs.Error{
 			//databse prepare fail
@@ -376,7 +382,7 @@ func registerDevice(ctx *gin.Context, db *sql.DB) {
 		})
 		return
 	}
-	_, err = stmt.ExecContext(ctx, userId, registration.FcmToken)
+	_, err = stmt.ExecContext(ctx, userId, registration.FcmToken, registration.IsFirebase)
 	if err != nil {
 		ctx.JSON(500, structs.Error{
 			//database insert fail
@@ -391,36 +397,30 @@ func registerDevice(ctx *gin.Context, db *sql.DB) {
 	ctx.Status(201)
 }
 
-func getUserId(token string) (string, error) {
+func getUserId(token string) (int, error) {
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://traewelling.de/api/v1/auth/user", nil)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	req.Header.Set("Accept", "application/json")
 	res, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
-	var data map[string]interface{}
+	data := make(map[string](map[string]interface{}))
 	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	err = json.Unmarshal([]byte(rawData), &data)
-	if err != nil {
-		return "", err
+	fmt.Println(data)
+	fmt.Println(int(data["data"]["id"].(float64)))
+	if _, ok := data["data"]["id"].(float64); !ok {
+		return 0, errors.New("couldn't find id")
 	}
-	dataElement, ok := data["data"].(map[string]interface{})
-	if !ok {
-		return "", errors.New("data empty")
-	}
-	idElement, ok := dataElement["id"]
-	if !ok {
-		return "", errors.New("id nonexistent")
-	}
-	return strconv.Itoa(idElement.(int)), nil
+	return int(data["data"]["id"].(float64)), nil
 }
 
 func createDevicesTable(db *sql.DB) error {
@@ -430,6 +430,7 @@ func createDevicesTable(db *sql.DB) error {
           user_id INT NOT NULL,
           fcm_token TEXT NOT NULL UNIQUE,
 		  failed_attempts INT NOT NULL,
+		  is_firebase boolean NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`
