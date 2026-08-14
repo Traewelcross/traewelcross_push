@@ -404,17 +404,24 @@ func getUserId(token string) (int, error) {
 		return 0, err
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	req.Header.Set("User-Agent", "Traewelcross-push/1.0.1 (https://github.com/traewelcross/traewelcross_push; traewelcross.de)")
 	req.Header.Set("Accept", "application/json")
 	res, err := client.Do(req)
+	defer res.Body.Close()
 	if err != nil {
 		return 0, err
 	}
 	data := make(map[string](map[string]interface{}))
 	rawData, err := io.ReadAll(res.Body)
 	if err != nil {
+		fmt.Println("!ERROR!")
 		return 0, err
 	}
 	err = json.Unmarshal([]byte(rawData), &data)
+	if err != nil {
+		fmt.Println("!JSON ERROR!")
+		return 0, err
+	}
 	fmt.Println(data)
 	fmt.Println(int(data["data"]["id"].(float64)))
 	if _, ok := data["data"]["id"].(float64); !ok {
