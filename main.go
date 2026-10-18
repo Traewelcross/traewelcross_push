@@ -37,7 +37,7 @@ func main() {
 		logger.Error().Msg("Error loading .env file")
 	}
 
-	app, err := firebase.NewApp(context.Background(), nil, option.WithCredentialsFile(os.Getenv("FIREBASE_CONFIG")))
+	app, err := firebase.NewApp(context.Background(), nil, option.WithAuthCredentialsFile(option.ServiceAccount, os.Getenv("FIREBASE_CONFIG")))
 	if err != nil {
 		logger.Fatal().Msgf("firebase error: %v\n", err)
 	}
@@ -93,7 +93,10 @@ func main() {
 	router.POST("/wh", func(ctx *gin.Context) {
 		sendPush(ctx, db, app)
 	})
-	router.Run()
+	err = router.Run()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func updateDevice(ctx *gin.Context, db *sql.DB) {
@@ -136,6 +139,7 @@ func updateDevice(ctx *gin.Context, db *sql.DB) {
 		return
 	}
 	stmt, err := db.PrepareContext(ctx, "UPDATE devices SET failed_attempts = 0, updated_at = NOW(), fcm_token = $1 WHERE fcm_token = $2 AND user_id = $3")
+	defer stmt.Close()
 	if err != nil {
 		ctx.JSON(500, structs.Error{
 			//databse prepare fail
@@ -199,6 +203,7 @@ func deleteDevice(ctx *gin.Context, db *sql.DB) {
 		return
 	}
 	stmt, err := db.PrepareContext(ctx, "DELETE FROM devices WHERE fcm_token = $1 AND user_id = $2")
+	defer stmt.Close()
 	if err != nil {
 		ctx.JSON(500, structs.Error{
 			//databse prepare fail
@@ -244,6 +249,7 @@ func sendPush(ctx *gin.Context, db *sql.DB, app *firebase.App) {
 		logger.Warn().Err(err).Msg("Coudln't insert Event")
 	}
 	stmt, err := db.PrepareContext(ctx, "SELECT fcm_token FROM devices WHERE user_id = $1 AND is_firebase")
+	defer stmt.Close()
 	if err != nil {
 		logger.Error().Msg("Can't prepare token query")
 		ctx.Status(500)
@@ -282,12 +288,14 @@ func sendPush(ctx *gin.Context, db *sql.DB, app *firebase.App) {
 		Data: map[string]string{
 			"rawBody": string(str),
 		},
+		//Tokens: tokens,
 		Tokens: tokens,
 	}
 	br, err := client.SendEachForMulticast(ctx, message)
 	if err != nil {
 		ctx.Status(500)
-		logger.Error().Msg("Failed to send push notification (general)")
+		logger.Error().Msg("Failed to send push notification (general):")
+		fmt.Println(err)
 		return
 	}
 	for i, resp := range br.Responses {
@@ -374,6 +382,7 @@ func registerDevice(ctx *gin.Context, db *sql.DB) {
 		return
 	}
 	stmt, err := db.PrepareContext(ctx, "INSERT INTO devices (user_id,fcm_token,is_firebase,failed_attempts) VALUES ($1,$2,$3,0)")
+	defer stmt.Close()
 	if err != nil {
 		ctx.JSON(500, structs.Error{
 			//databse prepare fail
@@ -394,6 +403,7 @@ func registerDevice(ctx *gin.Context, db *sql.DB) {
 	for i := range authToken {
 		authToken[i] = 0
 	}
+	//fmt.Println("Token used", registration.FcmToken)
 	ctx.Status(201)
 }
 
@@ -404,7 +414,7 @@ func getUserId(token string) (int, error) {
 		return 0, err
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	req.Header.Set("User-Agent", "Traewelcross-push/1.0.1 (https://github.com/traewelcross/traewelcross_push; traewelcross.de)")
+	req.Header.Set("User-Agent", "Traewelcross-push/1.1.0 (https://github.com/traewelcross/traewelcross_push; traewelcross.de)")
 	req.Header.Set("Accept", "application/json")
 	res, err := client.Do(req)
 	defer res.Body.Close()
