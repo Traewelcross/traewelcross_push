@@ -81,13 +81,13 @@ func main() {
 		fmt.Println(string(str))
 		c.Redirect(301, "https://traewelcross.de")
 	})
-	router.POST("/register", func(ctx *gin.Context) {
+	router.POST("/v2/register", func(ctx *gin.Context) {
 		registerDevice(ctx, db)
 	})
-	router.PATCH("/update", func(ctx *gin.Context) {
+	router.PATCH("/v2/update", func(ctx *gin.Context) {
 		updateDevice(ctx, db)
 	})
-	router.DELETE("/unregister", func(ctx *gin.Context) {
+	router.DELETE("/v2/unregister", func(ctx *gin.Context) {
 		deleteDevice(ctx, db)
 	})
 	router.POST("/wh", func(ctx *gin.Context) {
@@ -246,7 +246,7 @@ func sendPush(ctx *gin.Context, db *sql.DB, app *firebase.App) {
 		return
 	}
 	if err != nil {
-		logger.Warn().Err(err).Msg("Coudln't insert Event")
+		logger.Warn().Err(err).Msg("Couldn't insert Event")
 	}
 	stmt, err := db.PrepareContext(ctx, "SELECT fcm_token FROM devices WHERE user_id = $1 AND is_firebase")
 	defer stmt.Close()
@@ -289,7 +289,7 @@ func sendPush(ctx *gin.Context, db *sql.DB, app *firebase.App) {
 			"rawBody": string(str),
 		},
 		//Tokens: tokens,
-		Tokens: tokens,
+		Fids: tokens,
 	}
 	br, err := client.SendEachForMulticast(ctx, message)
 	if err != nil {
